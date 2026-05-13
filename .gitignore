@@ -1,0 +1,10 @@
+# macOS / editor noise
+.DS_Store
+*.swp
+*~
+.idea/
+.vscode/
+
+# Agent-direction scaffolding; not part of the published tap.
+BINARY_PROMPT.md
+HUMAN_PROMPT.md

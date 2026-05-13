@@ -1,0 +1,54 @@
+# Auto-merge: enable squash auto-merge on PRs labeled `auto-bump` once all
+# required checks pass.
+#
+# Safety properties:
+#   - Only acts on PRs with the `auto-bump` label (applied by auto-bump.yml).
+#   - Only acts on PRs from this same repository (no forks).
+#   - Only acts on PRs that modify nothing outside `Formula/peeroxide.rb`.
+#   - Uses `gh pr merge --auto`, which is gated by branch protection rules;
+#     if you set up required status checks on `main`, those still gate the
+#     merge.
+#
+# To disable temporarily without touching the file, remove the `auto-bump`
+# label from the PR; this workflow re-runs on `pull_request_target` events
+# but takes no action without the label.
+name: auto-merge
+
+on:
+  pull_request_target:
+    types: [opened, reopened, labeled, synchronize]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  enable-automerge:
+    name: Enable auto-merge on auto-bump PRs
+    runs-on: ubuntu-latest
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      contains(github.event.pull_request.labels.*.name, 'auto-bump')
+    steps:
+      - name: Verify PR only touches Formula/peeroxide.rb
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          FILES=$(gh pr view "$PR_NUMBER" --json files --jq '.files[].path')
+          echo "Files changed:"
+          echo "$FILES"
+          # Reject if anything other than Formula/peeroxide.rb is changed.
+          OFFENDING=$(echo "$FILES" | grep -vx 'Formula/peeroxide.rb' || true)
+          if [ -n "$OFFENDING" ]; then
+            echo "Refusing to auto-merge: PR touches files outside Formula/peeroxide.rb:" >&2
+            echo "$OFFENDING" >&2
+            exit 1
+          fi
+
+      - name: Enable squash auto-merge
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: gh pr merge "$PR_NUMBER" --auto --squash

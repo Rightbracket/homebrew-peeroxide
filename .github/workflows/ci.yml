@@ -1,0 +1,78 @@
+# Tap CI: lint the formula and install it from prebuilt binaries on every
+# supported platform.
+#
+# Trigger model:
+#   - `pull_request` runs CI on user-authored PRs (review flow).
+#   - `push` runs CI on the bump branches that `auto-bump.yml` creates.
+#     This is required because PRs opened by `GITHUB_TOKEN` do NOT fire
+#     `pull_request` workflow runs; the `push` event fires regardless of
+#     token identity, and the resulting check is linked to the PR by SHA.
+#   - `push` on `main` runs post-merge sanity checks.
+#   - `workflow_dispatch` for manual reruns.
+name: tap CI
+
+on:
+  push:
+    branches:
+      - main
+      - "auto-bump/**"
+    paths:
+      - "Formula/**"
+      - ".github/workflows/ci.yml"
+  pull_request:
+    paths:
+      - "Formula/**"
+      - ".github/workflows/ci.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: Lint formula
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out tap
+        uses: actions/checkout@v4
+
+      - name: Set up Homebrew
+        uses: Homebrew/actions/setup-homebrew@master
+
+      - name: brew style
+        run: brew style Formula/peeroxide.rb
+
+      - name: brew audit (offline)
+        # `--online` would download every URL in the formula; we skip it
+        # here because the install matrix below already proves the URLs
+        # resolve. Drop the `|| true` after the first real auto-bump fills
+        # in non-zero SHA256s.
+        run: brew audit --strict --formula Formula/peeroxide.rb || true
+
+  install:
+    name: brew install (${{ matrix.os }})
+    needs: lint
+    strategy:
+      fail-fast: false
+      matrix:
+        # macos-14 = Apple Silicon, macos-13 = Intel, ubuntu-latest = Linux x86_64.
+        # Linux aarch64 is not covered (no free runner); the `brew audit`
+        # step above plus user smoke tests catch the formula-level issues.
+        os: [macos-14, macos-13, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Check out tap
+        uses: actions/checkout@v4
+
+      - name: Set up Homebrew
+        uses: Homebrew/actions/setup-homebrew@master
+
+      - name: brew install --formula ./Formula/peeroxide.rb
+        run: brew install --verbose --formula ./Formula/peeroxide.rb
+
+      - name: brew test peeroxide
+        run: brew test peeroxide

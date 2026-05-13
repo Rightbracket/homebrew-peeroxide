@@ -1,0 +1,230 @@
+# Auto-bump: poll upstream Releases and open a same-repo PR when a new
+# `peeroxide-cli-v*` GitHub Release is available.
+#
+# Authentication model:
+#   - Uses ONLY the per-run `GITHUB_TOKEN`. No PAT, no GitHub App, no
+#     long-lived secrets. The token is minted fresh by GitHub for this run
+#     and discarded when the job ends.
+#   - Same-repo PR creation requires the repo setting:
+#       Settings -> Actions -> General ->
+#         Workflow permissions: Read and write
+#         "Allow GitHub Actions to create and approve pull requests": ON
+#     This is a one-time, non-rotating repo setting.
+#
+# CI on the resulting PR:
+#   - PRs opened by `GITHUB_TOKEN` do NOT trigger `pull_request` workflow
+#     runs by default. `ci.yml` is configured to also trigger on `push` to
+#     `auto-bump/**`, which fires regardless of token identity. The push
+#     event creates the check, which is then linked to the PR by SHA.
+name: auto-bump
+
+on:
+  schedule:
+    # Daily at 06:17 UTC. Offset off-the-hour to spread Actions load.
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to bump to (e.g. 0.2.0). Leave blank to auto-discover the latest peeroxide-cli release."
+        required: false
+        type: string
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: auto-bump
+  cancel-in-progress: false
+
+jobs:
+  bump:
+    name: Bump formula to latest peeroxide-cli release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out tap
+        uses: actions/checkout@v4
+
+      - name: Discover target version
+        id: target
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+
+          if [ -n "${INPUT_VERSION:-}" ]; then
+            VERSION="$INPUT_VERSION"
+            echo "Using version from workflow input: $VERSION"
+          else
+            # List up to 50 releases, filter for peeroxide-cli-v*, pick the
+            # highest by semver. `gh release list` returns newest-first by
+            # creation time, which usually matches semver order, but we
+            # sort defensively in case of out-of-order publishes.
+            VERSION=$(
+              gh release list \
+                --repo Rightbracket/peeroxide \
+                --limit 50 \
+                --json tagName \
+                --jq '[.[] | select(.tagName | startswith("peeroxide-cli-v")) | .tagName | sub("^peeroxide-cli-v"; "")] | sort_by(split(".") | map(tonumber? // 0)) | last // empty'
+            )
+            if [ -z "$VERSION" ]; then
+              echo "No peeroxide-cli-v* releases found upstream; nothing to do."
+              echo "skip=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            echo "Discovered latest upstream peeroxide-cli version: $VERSION"
+          fi
+
+          # The formula does not carry an explicit `version` line (it would
+          # be redundant with the version Homebrew parses from the URL). We
+          # therefore read the current version out of the first url line.
+          CURRENT=$(grep -Eo 'peeroxide-cli-v[0-9]+(\.[0-9]+)+' Formula/peeroxide.rb | head -n1 | sed 's/^peeroxide-cli-v//')
+          echo "Current formula version: $CURRENT"
+
+          if [ "$VERSION" = "$CURRENT" ]; then
+            echo "Formula already at $VERSION; no bump needed."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "version=$VERSION"            >> "$GITHUB_OUTPUT"
+          echo "current=$CURRENT"            >> "$GITHUB_OUTPUT"
+          echo "tag=peeroxide-cli-v$VERSION" >> "$GITHUB_OUTPUT"
+          echo "skip=false"                  >> "$GITHUB_OUTPUT"
+
+      - name: Download SHA256 sidecars
+        if: steps.target.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.target.outputs.tag }}
+        run: |
+          set -euo pipefail
+          mkdir -p _shas
+          gh release download "$TAG" \
+            --repo Rightbracket/peeroxide \
+            --pattern '*.sha256' \
+            --dir _shas
+          echo "Downloaded sidecars:"
+          ls -1 _shas
+
+      - name: Parse SHA256s
+        if: steps.target.outputs.skip != 'true'
+        id: shas
+        env:
+          VERSION: ${{ steps.target.outputs.version }}
+        run: |
+          set -euo pipefail
+          # Sidecar format: `<sha256>  <filename>`
+          extract() {
+            local triple="$1"
+            local file="_shas/peeroxide-${VERSION}-${triple}.tar.gz.sha256"
+            if [ ! -f "$file" ]; then
+              echo "ERROR: missing sidecar $file" >&2
+              exit 1
+            fi
+            awk '{print $1}' "$file"
+          }
+
+          MAC_UNIVERSAL=$(extract universal-apple-darwin)
+          LINUX_ARM=$(extract aarch64-unknown-linux-gnu)
+          LINUX_X86=$(extract x86_64-unknown-linux-gnu)
+
+          # Sanity-check each is a 64-char hex string.
+          for sha in "$MAC_UNIVERSAL" "$LINUX_ARM" "$LINUX_X86"; do
+            if ! [[ "$sha" =~ ^[0-9a-f]{64}$ ]]; then
+              echo "ERROR: invalid sha256 value: $sha" >&2
+              exit 1
+            fi
+          done
+
+          echo "mac_universal=$MAC_UNIVERSAL" >> "$GITHUB_OUTPUT"
+          echo "linux_arm=$LINUX_ARM"         >> "$GITHUB_OUTPUT"
+          echo "linux_x86=$LINUX_X86"         >> "$GITHUB_OUTPUT"
+
+      - name: Rewrite Formula/peeroxide.rb
+        if: steps.target.outputs.skip != 'true'
+        env:
+          OLD_VERSION: ${{ steps.target.outputs.current }}
+          NEW_VERSION: ${{ steps.target.outputs.version }}
+          SHA_MAC_UNIVERSAL: ${{ steps.shas.outputs.mac_universal }}
+          SHA_LINUX_ARM: ${{ steps.shas.outputs.linux_arm }}
+          SHA_LINUX_X86: ${{ steps.shas.outputs.linux_x86 }}
+        run: |
+          python3 - <<'PY'
+          import os, re, sys, pathlib
+
+          path = pathlib.Path("Formula/peeroxide.rb")
+          text = path.read_text()
+
+          old_version = os.environ["OLD_VERSION"]
+          new_version = os.environ["NEW_VERSION"]
+          shas = {
+              "universal-apple-darwin":     os.environ["SHA_MAC_UNIVERSAL"],
+              "aarch64-unknown-linux-gnu":  os.environ["SHA_LINUX_ARM"],
+              "x86_64-unknown-linux-gnu":   os.environ["SHA_LINUX_X86"],
+          }
+
+          # 1) Substitute every literal occurrence of the old version inside
+          #    URL paths for the new one. We anchor on `peeroxide-cli-v` and
+          #    `peeroxide-` (the asset filename prefix) so we don't rewrite
+          #    unrelated mentions in comments.
+          for prefix in ("peeroxide-cli-v", "peeroxide-"):
+              old = f"{prefix}{old_version}"
+              new = f"{prefix}{new_version}"
+              text = text.replace(old, new)
+
+          # 2) For each triple, find the `sha256 "..." # <triple>` line and
+          #    replace its hex payload. The trailing comment anchor is
+          #    intentional; do not remove it from the formula.
+          for triple, sha in shas.items():
+              pattern = re.compile(
+                  r'(sha256\s+)"[0-9a-f]{64}"(\s*#\s*' + re.escape(triple) + r'\s*)$',
+                  re.MULTILINE,
+              )
+              text, n = pattern.subn(rf'\g<1>"{sha}"\g<2>', text, count=1)
+              if n != 1:
+                  sys.exit(f"Failed to find/replace sha256 line for triple {triple}")
+
+          # Defensive: confirm no stale references to the old version remain.
+          if old_version in text:
+              sys.exit(f"Stale reference to old version {old_version} still present after rewrite")
+
+          path.write_text(text)
+          print(f"Rewrote Formula/peeroxide.rb: {old_version} -> {new_version}")
+          PY
+
+      - name: Show diff
+        if: steps.target.outputs.skip != 'true'
+        run: git --no-pager diff Formula/peeroxide.rb
+
+      - name: Create / update bump PR
+        if: steps.target.outputs.skip != 'true'
+        uses: peter-evans/create-pull-request@v6
+        with:
+          token: ${{ github.token }}
+          branch: auto-bump/peeroxide-cli-v${{ steps.target.outputs.version }}
+          delete-branch: true
+          add-paths: Formula/peeroxide.rb
+          commit-message: |
+            peeroxide ${{ steps.target.outputs.version }}
+
+            Bumps the formula to consume binaries from upstream release
+            ${{ steps.target.outputs.tag }}.
+          title: "peeroxide ${{ steps.target.outputs.version }}"
+          body: |
+            Automated bump to `peeroxide-cli-v${{ steps.target.outputs.version }}`.
+
+            **Upstream release:** https://github.com/Rightbracket/peeroxide/releases/tag/${{ steps.target.outputs.tag }}
+
+            ### SHA256s (from the release's `.sha256` sidecars)
+
+            | Target                      | SHA256 |
+            | --------------------------- | ------ |
+            | `universal-apple-darwin`    | `${{ steps.shas.outputs.mac_universal }}` |
+            | `aarch64-unknown-linux-gnu` | `${{ steps.shas.outputs.linux_arm }}` |
+            | `x86_64-unknown-linux-gnu`  | `${{ steps.shas.outputs.linux_x86 }}` |
+
+            Generated by `.github/workflows/auto-bump.yml`. CI runs against the
+            `auto-bump/peeroxide-cli-v${{ steps.target.outputs.version }}` branch push.
+          labels: auto-bump
