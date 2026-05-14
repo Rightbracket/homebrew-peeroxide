@@ -22,13 +22,15 @@ complete subcommand list.
 ## Install
 
 ```sh
-brew install rightbracket/peeroxide
+brew install rightbracket/peeroxide/peeroxide
 ```
 
-Homebrew expands this shorthand to `brew install rightbracket/peeroxide/peeroxide`
-because the formula name matches the tap name.
+The three-segment form `<user>/<tap>/<formula>` is required — Homebrew's
+two-segment `<user>/<tap>` form is only valid for tap-management
+commands (`brew tap`, `brew untap`), not for `brew install`. Homebrew
+will auto-tap `rightbracket/peeroxide` on first use.
 
-Or tap first and install later:
+Or tap explicitly first and install by short name:
 
 ```sh
 brew tap rightbracket/peeroxide
@@ -61,7 +63,7 @@ the latest `main` branch of `Rightbracket/peeroxide` and builds via
 `cargo install`, so a Rust toolchain is required:
 
 ```sh
-brew install --HEAD rightbracket/peeroxide
+brew install --HEAD rightbracket/peeroxide/peeroxide
 ```
 
 ## Upgrade
@@ -96,15 +98,17 @@ full CLI documentation, configuration, and protocol details.
 1. Upstream tags a new `peeroxide-cli-v<VERSION>` release.
 2. The `binary-release.yml` workflow in
    [`Rightbracket/peeroxide`](https://github.com/Rightbracket/peeroxide)
-   builds the four target binaries and attaches them (with `.sha256`
-   sidecars) to the GitHub Release.
+   builds the three target binaries (one universal macOS archive plus
+   the two Linux architectures) and attaches them, along with `.sha256`
+   sidecars, to the GitHub Release.
 3. This tap's [`auto-bump.yml`](.github/workflows/auto-bump.yml) workflow
    polls upstream Releases daily (and can be triggered on demand via
    **Actions → auto-bump → Run workflow**). When it finds a new version, it
    downloads the sidecars, rewrites `Formula/peeroxide.rb`, and opens a
    same-repo PR.
 4. [`ci.yml`](.github/workflows/ci.yml) installs the new formula on
-   `macos-14`, `macos-13`, and `ubuntu-latest` and runs `brew test`.
+   `macos-15`, `ubuntu-latest`, and `ubuntu-24.04-arm` and runs
+   `brew test`.
 5. [`auto-merge.yml`](.github/workflows/auto-merge.yml) squash-merges the
    PR once required checks pass, provided it only modifies the formula.
 
