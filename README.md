@@ -10,10 +10,10 @@ P2P subcommands. The core user-facing commands are:
 
 | Subcommand | Purpose                                                       |
 | ---------- | ------------------------------------------------------------- |
-| `chat`     | Peer-to-peer chat over the Hyperswarm DHT                      |
-| `cp`       | Copy files between peers                                       |
-| `deaddrop` | Anonymous store-and-forward drop / pickup of payloads          |
-| `node`     | Run a long-running Hyperswarm DHT bootstrap node               |
+| `chat`     | Peer-to-peer chat over the Hyperswarm DHT                     |
+| `cp`       | Copy files between peers                                      |
+| `deaddrop` |  "Dead drop" — anonymous drop / pickup of payload             |
+| `node`     | Run a Hyperswarm DHT node                                     |
 
 Additional DHT primitives (`announce`, `lookup`, `ping`) and configuration
 helpers (`config`) are also available. Run `peeroxide --help` for the
@@ -39,11 +39,11 @@ brew install peeroxide
 
 Prebuilt binaries are published for:
 
-| Platform                                | Target triple                  |
-| --------------------------------------- | ------------------------------ |
-| macOS (universal: Apple Silicon + Intel) | `universal-apple-darwin`       |
-| Linux, x86_64 (glibc)                   | `x86_64-unknown-linux-gnu`     |
-| Linux, aarch64 (glibc)                  | `aarch64-unknown-linux-gnu`    |
+| Platform                                 | Target triple                  |
+| ---------------------------------------- | ------------------------------ |
+| macOS (universal: Apple Silicon + Intel) | `universal-apple-darwin`      |
+| Linux, x86_64 (glibc)                    | `x86_64-unknown-linux-gnu`     |
+| Linux, aarch64 (glibc)                   | `aarch64-unknown-linux-gnu`    |
 
 The macOS archive is a fat binary containing both `arm64` and `x86_64`
 slices, so the same install works on Apple Silicon and Intel Macs without
@@ -84,7 +84,7 @@ brew untap rightbracket/peeroxide
 peeroxide --help
 peeroxide chat --help
 peeroxide cp --help
-peeroxide deaddrop --help
+peeroxide dd --help
 peeroxide node --help
 ```
 

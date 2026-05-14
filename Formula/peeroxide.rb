@@ -19,7 +19,7 @@
 # Users who want a from-source build can run:
 #   brew install --HEAD rightbracket/peeroxide/peeroxide
 class Peeroxide < Formula
-  desc "Hyperswarm DHT P2P CLI tools from peeroxide: chat, copy (cp), deaddrop, node"
+  desc "Hyperswarm DHT P2P CLI from peeroxide: chat, copy (cp), deaddrop (dd), node"
   homepage "https://github.com/Rightbracket/peeroxide"
   url "https://github.com/Rightbracket/peeroxide/releases/download/peeroxide-cli-v0.1.0/peeroxide-0.1.0-universal-apple-darwin.tar.gz"
   sha256 "eda6c509fc1ca0b85d5fac6bc53ad8ab76304e1c4e59453af5d6f05f55d2eaf2" # universal-apple-darwin
