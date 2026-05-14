@@ -57,16 +57,23 @@ jobs:
             VERSION="$INPUT_VERSION"
             echo "Using version from workflow input: $VERSION"
           else
-            # List up to 50 releases, filter for peeroxide-cli-v*, pick the
-            # highest by semver. `gh release list` returns newest-first by
-            # creation time, which usually matches semver order, but we
-            # sort defensively in case of out-of-order publishes.
+            # List up to 50 releases and pick the newest tag matching the
+            # strict `peeroxide-cli-vMAJOR.MINOR.PATCH` shape, sorted by
+            # createdAt. We can't use `/releases/latest` because that flag
+            # tracks the most recent release across ALL crates in the
+            # workspace (peeroxide, peeroxide-dht, libudx, peeroxide-cli),
+            # so it migrates off the CLI whenever a library is published.
+            # The regex anchors out any prerelease form like
+            # `peeroxide-cli-v0.2.0-rc.1` so they're skipped rather than
+            # mis-ranked.
             VERSION=$(
               gh release list \
                 --repo Rightbracket/peeroxide \
                 --limit 50 \
-                --json tagName \
-                --jq '[.[] | select(.tagName | startswith("peeroxide-cli-v")) | .tagName | sub("^peeroxide-cli-v"; "")] | sort_by(split(".") | map(tonumber? // 0)) | last // empty'
+                --json tagName,createdAt \
+                --jq '[.[] | select(.tagName | test("^peeroxide-cli-v[0-9]+\\.[0-9]+\\.[0-9]+$"))]
+                       | sort_by(.createdAt) | last | .tagName // empty
+                       | sub("^peeroxide-cli-v"; "")'
             )
             if [ -z "$VERSION" ]; then
               echo "No peeroxide-cli-v* releases found upstream; nothing to do."
@@ -98,15 +105,54 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.target.outputs.tag }}
+          VERSION: ${{ steps.target.outputs.version }}
         run: |
           set -euo pipefail
-          mkdir -p _shas
-          gh release download "$TAG" \
-            --repo Rightbracket/peeroxide \
-            --pattern '*.sha256' \
-            --dir _shas
-          echo "Downloaded sidecars:"
-          ls -1 _shas
+
+          # The release tag (created by release-plz) and the binary
+          # archives (built by Rightbracket/peeroxide's binary-release.yml
+          # on the tag push) are produced by separate workflows, so when
+          # we arrive here the tag may exist before its assets do. Upstream
+          # builds typically complete in well under three minutes; we poll
+          # for up to ten before declaring a real failure. A genuine
+          # upstream breakage will surface as a hard failure (and a daily
+          # nag from the cron), which is the signal we want.
+          DEADLINE=$(( $(date +%s) + 600 ))
+          ATTEMPT=0
+          MAC="_shas/peeroxide-${VERSION}-universal-apple-darwin.tar.gz.sha256"
+          ARM="_shas/peeroxide-${VERSION}-aarch64-unknown-linux-gnu.tar.gz.sha256"
+          X86="_shas/peeroxide-${VERSION}-x86_64-unknown-linux-gnu.tar.gz.sha256"
+
+          while :; do
+            ATTEMPT=$((ATTEMPT + 1))
+            # Clean slate each attempt: `gh release download` refuses to
+            # overwrite, and we don't want a partial publish from a prior
+            # attempt to mask a still-missing sidecar.
+            rm -rf _shas
+            mkdir -p _shas
+
+            if gh release download "$TAG" \
+                  --repo Rightbracket/peeroxide \
+                  --pattern '*.sha256' \
+                  --dir _shas 2>/dev/null \
+               && [ -f "$MAC" ] && [ -f "$ARM" ] && [ -f "$X86" ]; then
+              echo "All three sidecars present after attempt ${ATTEMPT}."
+              ls -1 _shas
+              break
+            fi
+
+            if [ "$(date +%s)" -ge "$DEADLINE" ]; then
+              echo "ERROR: tag $TAG exists but its .sha256 sidecars never published within 10 minutes." >&2
+              echo "  This usually means upstream binary-release.yml failed for this tag." >&2
+              echo "  Investigate: https://github.com/Rightbracket/peeroxide/actions" >&2
+              echo "  Sidecars seen so far:" >&2
+              ls -la _shas >&2 || true
+              exit 1
+            fi
+
+            echo "Sidecars not all present yet (attempt ${ATTEMPT}); sleeping 30s..."
+            sleep 30
+          done
 
       - name: Parse SHA256s
         if: steps.target.outputs.skip != 'true'
@@ -159,24 +205,40 @@ jobs:
 
           old_version = os.environ["OLD_VERSION"]
           new_version = os.environ["NEW_VERSION"]
+          triples = (
+              "universal-apple-darwin",
+              "aarch64-unknown-linux-gnu",
+              "x86_64-unknown-linux-gnu",
+          )
           shas = {
-              "universal-apple-darwin":     os.environ["SHA_MAC_UNIVERSAL"],
-              "aarch64-unknown-linux-gnu":  os.environ["SHA_LINUX_ARM"],
-              "x86_64-unknown-linux-gnu":   os.environ["SHA_LINUX_X86"],
+              "universal-apple-darwin":    os.environ["SHA_MAC_UNIVERSAL"],
+              "aarch64-unknown-linux-gnu": os.environ["SHA_LINUX_ARM"],
+              "x86_64-unknown-linux-gnu":  os.environ["SHA_LINUX_X86"],
           }
 
-          # 1) Substitute every literal occurrence of the old version inside
-          #    URL paths for the new one. We anchor on `peeroxide-cli-v` and
-          #    `peeroxide-` (the asset filename prefix) so we don't rewrite
-          #    unrelated mentions in comments.
-          for prefix in ("peeroxide-cli-v", "peeroxide-"):
-              old = f"{prefix}{old_version}"
-              new = f"{prefix}{new_version}"
+          # 1) Rewrite the upstream release-path version. Anchored on the
+          #    full prefix `peeroxide-cli-v` so we never touch a comment
+          #    that happens to contain a bare version number.
+          text = text.replace(
+              f"peeroxide-cli-v{old_version}",
+              f"peeroxide-cli-v{new_version}",
+          )
+
+          # 2) Rewrite each asset filename, anchored on its target triple
+          #    suffix. This is stricter than a bare `peeroxide-<old>`
+          #    replace (which could rewrite unrelated text in comments)
+          #    and stricter than a global version replace (which would
+          #    eat literally any occurrence of the old version string).
+          for triple in triples:
+              old = f"peeroxide-{old_version}-{triple}"
+              new = f"peeroxide-{new_version}-{triple}"
+              if old not in text:
+                  sys.exit(f"Expected to find asset filename `{old}` in formula but did not")
               text = text.replace(old, new)
 
-          # 2) For each triple, find the `sha256 "..." # <triple>` line and
-          #    replace its hex payload. The trailing comment anchor is
-          #    intentional; do not remove it from the formula.
+          # 3) Replace the sha256 line for each triple. The trailing
+          #    `# <triple>` comment is the anchor; do not remove it from
+          #    the formula or this step will silently no-op.
           for triple, sha in shas.items():
               pattern = re.compile(
                   r'(sha256\s+)"[0-9a-f]{64}"(\s*#\s*' + re.escape(triple) + r'\s*)$',
@@ -186,9 +248,17 @@ jobs:
               if n != 1:
                   sys.exit(f"Failed to find/replace sha256 line for triple {triple}")
 
-          # Defensive: confirm no stale references to the old version remain.
-          if old_version in text:
-              sys.exit(f"Stale reference to old version {old_version} still present after rewrite")
+          # 4) Defensive: confirm no stale, version-bearing references
+          #    remain. Anchored on the same prefixes we rewrote above so
+          #    substring-version collisions (e.g. 0.1.0 -> 0.1.10, where
+          #    "0.1.0" is a substring of "0.1.10") do not produce false
+          #    positives.
+          stale_markers = [f"peeroxide-cli-v{old_version}"] + [
+              f"peeroxide-{old_version}-{t}" for t in triples
+          ]
+          for marker in stale_markers:
+              if marker in text:
+                  sys.exit(f"Stale reference `{marker}` still present after rewrite")
 
           path.write_text(text)
           print(f"Rewrote Formula/peeroxide.rb: {old_version} -> {new_version}")
