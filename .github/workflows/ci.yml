@@ -43,15 +43,25 @@ jobs:
       - name: Set up Homebrew
         uses: Homebrew/actions/setup-homebrew@master
 
-      - name: brew style
-        run: brew style Formula/peeroxide.rb
+      - name: Register checkout as a Homebrew tap
+        # `brew style`/`audit`/`install` no longer accept loose file paths;
+        # the formula must be reachable through a tap. We symlink the
+        # workspace into Homebrew's taps directory so commands can address
+        # the formula as `rightbracket/peeroxide/peeroxide`.
+        run: |
+          TAP_DIR="$(brew --repository)/Library/Taps/rightbracket/homebrew-peeroxide"
+          mkdir -p "$(dirname "$TAP_DIR")"
+          ln -s "$GITHUB_WORKSPACE" "$TAP_DIR"
 
-      - name: brew audit (offline)
-        # `--online` would download every URL in the formula; we skip it
-        # here because the install matrix below already proves the URLs
-        # resolve. Drop the `|| true` after the first real auto-bump fills
-        # in non-zero SHA256s.
-        run: brew audit --strict --formula Formula/peeroxide.rb || true
+      - name: brew style
+        run: brew style rightbracket/peeroxide/peeroxide
+
+      - name: brew audit
+        # `--online` validates that every URL in the formula resolves and
+        # that the recorded SHA256s match. This is cheap (three small
+        # tarballs) and gives us a strong signal that auto-bump produced
+        # a coherent formula before we ever try to install it.
+        run: brew audit --strict --online --formula rightbracket/peeroxide/peeroxide
 
   install:
     name: brew install (${{ matrix.os }})
@@ -59,10 +69,19 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # macos-14 = Apple Silicon, macos-13 = Intel, ubuntu-latest = Linux x86_64.
-        # Linux aarch64 is not covered (no free runner); the `brew audit`
-        # step above plus user smoke tests catch the formula-level issues.
-        os: [macos-14, macos-13, ubuntu-latest]
+        # Matrix rationale:
+        #   - macos-15        : Apple Silicon runner. The macOS archive is
+        #                       a `lipo`'d universal binary, so the Intel
+        #                       slice is the same bytes shipped here; we
+        #                       trust upstream's lipo and skip a dedicated
+        #                       Intel runner (macos-13/14 queue times are
+        #                       prohibitively slow).
+        #   - ubuntu-latest   : Linux x86_64 archive.
+        #   - ubuntu-24.04-arm: Linux aarch64 archive. GitHub's free ARM
+        #                       runners (public repos, since Jan 2025)
+        #                       give us coverage that previously only
+        #                       existed in theory through `brew audit`.
+        os: [macos-15, ubuntu-latest, ubuntu-24.04-arm]
     runs-on: ${{ matrix.os }}
     steps:
       - name: Check out tap
@@ -71,8 +90,14 @@ jobs:
       - name: Set up Homebrew
         uses: Homebrew/actions/setup-homebrew@master
 
-      - name: brew install --formula ./Formula/peeroxide.rb
-        run: brew install --verbose --formula ./Formula/peeroxide.rb
+      - name: Register checkout as a Homebrew tap
+        run: |
+          TAP_DIR="$(brew --repository)/Library/Taps/rightbracket/homebrew-peeroxide"
+          mkdir -p "$(dirname "$TAP_DIR")"
+          ln -s "$GITHUB_WORKSPACE" "$TAP_DIR"
+
+      - name: brew install peeroxide
+        run: brew install --verbose rightbracket/peeroxide/peeroxide
 
       - name: brew test peeroxide
         run: brew test peeroxide
