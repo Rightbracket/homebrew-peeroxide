@@ -38,10 +38,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check out tap
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Homebrew
-        uses: Homebrew/actions/setup-homebrew@master
+        uses: Homebrew/actions/setup-homebrew@main
 
       - name: Register checkout as a Homebrew tap
         # `brew style`/`audit`/`install` no longer accept loose file paths;
@@ -85,10 +85,10 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - name: Check out tap
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Homebrew
-        uses: Homebrew/actions/setup-homebrew@master
+        uses: Homebrew/actions/setup-homebrew@main
 
       - name: Register checkout as a Homebrew tap
         run: |

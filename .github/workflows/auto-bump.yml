@@ -43,7 +43,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check out tap
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Discover target version
         id: target
@@ -270,7 +270,7 @@ jobs:
 
       - name: Create / update bump PR
         if: steps.target.outputs.skip != 'true'
-        uses: peter-evans/create-pull-request@v6
+        uses: peter-evans/create-pull-request@v7
         with:
           token: ${{ github.token }}
           branch: auto-bump/peeroxide-cli-v${{ steps.target.outputs.version }}
