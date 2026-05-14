@@ -1,22 +1,32 @@
-# Auto-merge: enable squash auto-merge on PRs labeled `auto-bump` once all
-# required checks pass.
+# Auto-merge: enable squash auto-merge on a bump PR once it has been
+# created and labeled. Invoked exclusively via `workflow_dispatch` from
+# `auto-bump.yml` (and optionally manually for ad-hoc recovery).
 #
-# Safety properties:
-#   - Only acts on PRs with the `auto-bump` label (applied by auto-bump.yml).
-#   - Only acts on PRs from this same repository (no forks).
-#   - Only acts on PRs that modify nothing outside `Formula/peeroxide.rb`.
-#   - Uses `gh pr merge --auto`, which is gated by branch protection rules;
-#     if you set up required status checks on `main`, those still gate the
-#     merge.
+# Why workflow_dispatch instead of pull_request_target?
+#   GitHub deliberately suppresses workflow runs for events triggered by
+#   `GITHUB_TOKEN`, with `workflow_dispatch` and `repository_dispatch` as
+#   the only exceptions. Since `auto-bump.yml` opens the PR using its own
+#   `GITHUB_TOKEN`, a `pull_request_target` listener never fires; the
+#   `opened`/`labeled` events get dropped on the floor. Dispatching this
+#   workflow explicitly sidesteps the suppression.
+#
+# Safety properties (re-verified at run time, not trusted from the input):
+#   - PR must be OPEN.
+#   - PR must come from this repo (no forks).
+#   - PR must carry the `auto-bump` label.
+#   - PR must modify nothing outside `Formula/peeroxide.rb`.
 #
 # To disable temporarily without touching the file, remove the `auto-bump`
-# label from the PR; this workflow re-runs on `pull_request_target` events
-# but takes no action without the label.
+# label from the PR; the next dispatch will refuse to merge it.
 name: auto-merge
 
 on:
-  pull_request_target:
-    types: [opened, reopened, labeled, synchronize]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "PR number to enable auto-merge on"
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -24,31 +34,52 @@ permissions:
 
 jobs:
   enable-automerge:
-    name: Enable auto-merge on auto-bump PRs
+    name: Enable auto-merge on auto-bump PR
     runs-on: ubuntu-latest
-    if: >-
-      github.event.pull_request.head.repo.full_name == github.repository &&
-      contains(github.event.pull_request.labels.*.name, 'auto-bump')
     steps:
-      - name: Verify PR only touches Formula/peeroxide.rb
+      - name: Verify PR and enable auto-merge
         env:
           GH_TOKEN: ${{ github.token }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+          REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
-          FILES=$(gh pr view "$PR_NUMBER" --json files --jq '.files[].path')
-          echo "Files changed:"
-          echo "$FILES"
-          # Reject if anything other than Formula/peeroxide.rb is changed.
-          OFFENDING=$(echo "$FILES" | grep -vx 'Formula/peeroxide.rb' || true)
+
+          # Fetch everything we need in a single API round-trip. We do not
+          # trust the dispatcher's claim that this is the right PR; we
+          # re-verify each safety property below.
+          DATA=$(gh pr view "$PR_NUMBER" --repo "$REPO" \
+            --json state,labels,headRepository,headRepositoryOwner,files)
+
+          STATE=$(echo "$DATA" | jq -r '.state')
+          if [ "$STATE" != "OPEN" ]; then
+            echo "Refusing: PR #$PR_NUMBER is not OPEN (state=$STATE)." >&2
+            exit 1
+          fi
+
+          # Same-repo PR (no forks). headRepository is null for PRs whose
+          # head repo has been deleted; treat that as a hard refusal.
+          HEAD_OWNER=$(echo "$DATA" | jq -r '.headRepositoryOwner.login // ""')
+          HEAD_NAME=$(echo "$DATA" | jq -r '.headRepository.name // ""')
+          HEAD_FULL="$HEAD_OWNER/$HEAD_NAME"
+          if [ "$HEAD_FULL" != "$REPO" ]; then
+            echo "Refusing: PR #$PR_NUMBER head ($HEAD_FULL) is not this repo ($REPO)." >&2
+            exit 1
+          fi
+
+          # Must carry the `auto-bump` label.
+          if ! echo "$DATA" | jq -e '.labels[] | select(.name == "auto-bump")' >/dev/null; then
+            echo "Refusing: PR #$PR_NUMBER does not have the 'auto-bump' label." >&2
+            exit 1
+          fi
+
+          # Only Formula/peeroxide.rb may be modified.
+          OFFENDING=$(echo "$DATA" | jq -r '.files[].path' | grep -vx 'Formula/peeroxide.rb' || true)
           if [ -n "$OFFENDING" ]; then
-            echo "Refusing to auto-merge: PR touches files outside Formula/peeroxide.rb:" >&2
+            echo "Refusing: PR #$PR_NUMBER touches files outside Formula/peeroxide.rb:" >&2
             echo "$OFFENDING" >&2
             exit 1
           fi
 
-      - name: Enable squash auto-merge
-        env:
-          GH_TOKEN: ${{ github.token }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-        run: gh pr merge "$PR_NUMBER" --auto --squash
+          echo "All safety checks passed for PR #$PR_NUMBER; enabling auto-merge."
+          gh pr merge "$PR_NUMBER" --repo "$REPO" --auto --squash
