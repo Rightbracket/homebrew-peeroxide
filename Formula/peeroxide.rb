@@ -69,6 +69,15 @@ class Peeroxide < Formula
     man1.install Dir["man/man1/*.1"] if Dir.exist?("man/man1")
   end
 
+  def caveats
+    <<~EOS
+      To generate default configuration files, run:
+        peeroxide init
+
+      This step is optional but recommended.
+    EOS
+  end
+
   test do
     assert_match version.to_s, shell_output("#{bin}/peeroxide --version")
     assert_match "peeroxide",  shell_output("#{bin}/peeroxide --help")
