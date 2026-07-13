@@ -21,8 +21,8 @@
 class Peeroxide < Formula
   desc "Hyperswarm DHT P2P CLI from peeroxide: chat, copy (cp), deaddrop (dd), node"
   homepage "https://github.com/Rightbracket/peeroxide"
-  url "https://github.com/Rightbracket/peeroxide/releases/download/peeroxide-cli-v0.2.1/peeroxide-0.2.1-universal-apple-darwin.tar.gz"
-  sha256 "319a4a9a6474f1f02b5f72db0dd91493f3e7c9da64436b07712bb69b733c2bdb" # universal-apple-darwin
+  url "https://github.com/Rightbracket/peeroxide/releases/download/peeroxide-cli-v0.3.1/peeroxide-0.3.1-universal-apple-darwin.tar.gz"
+  sha256 "8a9b810ef96a4b6a2b1f758baf9154871bbf556ae990b336ced1d28e3dc0bf56" # universal-apple-darwin
   license any_of: ["MIT", "Apache-2.0"]
 
   # Track the newest `peeroxide-cli-v*` GitHub release. The workspace also
@@ -43,12 +43,12 @@ class Peeroxide < Formula
 
   on_linux do
     on_arm do
-      url "https://github.com/Rightbracket/peeroxide/releases/download/peeroxide-cli-v0.2.1/peeroxide-0.2.1-aarch64-unknown-linux-gnu.tar.gz"
-      sha256 "7e57a031d3db85d559435782936ebc583bd6409155a646adfe7b1540e8fa7b10" # aarch64-unknown-linux-gnu
+      url "https://github.com/Rightbracket/peeroxide/releases/download/peeroxide-cli-v0.3.1/peeroxide-0.3.1-aarch64-unknown-linux-gnu.tar.gz"
+      sha256 "1e2c45a459e9e3cb65b0107a3b1e1d3363204f3b5376bd6d8553df71c3a3d935" # aarch64-unknown-linux-gnu
     end
     on_intel do
-      url "https://github.com/Rightbracket/peeroxide/releases/download/peeroxide-cli-v0.2.1/peeroxide-0.2.1-x86_64-unknown-linux-gnu.tar.gz"
-      sha256 "15408260115ac3c54190fea9f7573526668baa3dfeeef9143bcb91407c4ec3b3" # x86_64-unknown-linux-gnu
+      url "https://github.com/Rightbracket/peeroxide/releases/download/peeroxide-cli-v0.3.1/peeroxide-0.3.1-x86_64-unknown-linux-gnu.tar.gz"
+      sha256 "61bbd7ef930dc9cecbc2c93653a35c36493635c15a3530998ab7247331d2ca58" # x86_64-unknown-linux-gnu
     end
   end
 
